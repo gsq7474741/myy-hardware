@@ -1,0 +1,4 @@
+config IDF_TARGET
+    string
+    prompt "Target chip"
+    default "esp32s3"
