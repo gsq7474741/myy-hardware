@@ -1,0 +1,32 @@
+menu "Device Configuration"
+    config PRODUCT_KEY
+        string
+        prompt "Product Key"
+        default "ia66OXimz4V"
+        
+    config DEVICE_NAME
+        string
+        prompt "Device Name"
+        default "nanhai_test_1"
+        
+    config DEVICE_SECRET
+        string
+        prompt "Device Secret"
+        default "1c5cc55678e5bf874b4462cf8a739856"  
+    endmenu
+
+menu "Version"
+    config DEVICE_VERSION
+        string 
+        prompt "Device Version"
+        default "0.1.0"
+    endmenu
+
+menu "AliCoulde URL"
+    config ALICOULDE_URL
+        string 
+        prompt "Alicoulde Url"
+        default "iot-06z009wo9u7aniw.mqtt.iothub.aliyuncs.com"
+    endmenu
+
+
