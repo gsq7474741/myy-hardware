@@ -1,71 +1,71 @@
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
+#include "nvs_flash.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
-#include "nvs_flash.h"
 
-#include "lwip/err.h"
-#include "lwip/sys.h"
-
-#include <pthread.h>
-#include <stdio.h>
-#include <unistd.h>
 #include "aiot_dm_api.h"
 #include "aiot_mqtt_api.h"
+#include "aiot_mqtt_download_api.h"
+#include "aiot_ota_api.h"
 #include "aiot_state_api.h"
 #include "aiot_sysdep_api.h"
 
-#include "aiot_mqtt_download_api.h"
-#include "aiot_ota_api.h"
+static const char *TAG         = "MAIN";                 // LOG 标签
+char              *cur_version = CONFIG_FIRMWARE_VERSION;// 固件更新时将此版本号更改为跟阿里云上面设置的一样的格式即可例如：“1.0.0”、“1.0.1”
 
-
-char *cur_version = CONFIG_FIRMWARE_VERSION;// 固件更新时将此版本号更改为跟阿里云上面设置的一样的格式即可例如：“1.0.0”、“1.0.1”
-
-/*485模块*/
+/**
+ * 485模块
+ */
 
 #include "driver/gpio.h"
 #include "driver/uart.h"
-#include "esp_system.h"
+
+#define TXD_PIN         17        // RS485 TX pin
+#define RXD_PIN         18        // RS485 RX pin
+#define RECV_ENABLE_PIN GPIO_NUM_1// RS485 接收使能 pin
+#define UART_PORT_NUM   1
+#define BUF_SIZE        (1024)
 
 typedef struct {
-	float light_value;                  // 光照强度，单位 Lux
-	float environment_moisture_float;   // 环境湿度，单位 %
-	float environment_temperature_float;// 环境温度，单位 °C
-	float solid_water_float;            // 土壤湿度，单位 %
-	float solid_temp_float;             // 土壤温度，单位 °C
-	float solid_ec_float;               // 土壤电导率，单位 μS/cm
-	float solid_ph_float;               // 土壤 pH 值
-} SensorData;
+	float luminance;   // 光照强度，单位 Lux
+	float air_humidity;// 环境湿度，单位 %
+	float air_temp;    // 环境温度，单位 °C
+	float soil_water;  // 土壤湿度，单位 %
+	float soil_temp;   // 土壤温度，单位 °C
+	float soil_ec;     // 土壤电导率，单位 μS/cm
+	float soil_ph;     // 土壤 pH 值
+} sensor_data_t;
 
-SensorData sensor_data;// 创建一个 SensorData 类型的全局变量或静态变量
+sensor_data_t sensor_data;// 创建一个 SensorData 类型的全局变量或静态变量
+bool          water_switch = false;
 
-int water_switch = 0;
 
-#define TXD_PIN           17        // RS485 TX pin
-#define RXD_PIN           18        // RS485 RX pin
-#define RECEPT_ENABLE_PIN GPIO_NUM_1// RS485 接收使能 pin
-#define UART_PORT_NUM     1
-#define BUF_SIZE          (1024)
-
-void recept_enable_pin_init()
+void receive_enable_pin_init()
 {
 	gpio_config_t io_config;
 	io_config.mode         = GPIO_MODE_OUTPUT;
 	io_config.pull_up_en   = GPIO_PULLUP_DISABLE;
 	io_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
-	io_config.pin_bit_mask = 1ULL << RECEPT_ENABLE_PIN;
+	io_config.pin_bit_mask = 1ULL << RECV_ENABLE_PIN;
 	io_config.intr_type    = GPIO_INTR_DISABLE;
 	gpio_config(&io_config);
 }
 
 // CRC16校验计算函数
-unsigned int calculate_crc16(const uint8_t *data, uint8_t length)
+uint32_t calculate_crc16(const uint8_t *data, uint8_t length)
 {
-	unsigned int crc = 0xFFFF;
+	uint32_t crc = 0xFFFF;
 	for (uint8_t i = 0; i < length; i++) {
 		crc ^= data[i];
 		for (uint8_t j = 0; j < 8; j++) {
@@ -79,7 +79,7 @@ unsigned int calculate_crc16(const uint8_t *data, uint8_t length)
 }
 
 // 发送Modbus命令
-void sendmodbus_command(uint8_t address, uint8_t functionCode, uint16_t registerAddress, uint16_t value)
+void send_modbus_command(uint8_t address, uint8_t functionCode, uint16_t registerAddress, uint16_t value)
 {
 	uint8_t command[8];
 	command[0] = address;               // 设备地址
@@ -89,10 +89,10 @@ void sendmodbus_command(uint8_t address, uint8_t functionCode, uint16_t register
 	command[4] = value >> 8;            // 数据高字节
 	command[5] = value & 0xFF;          // 数据低字节
 
-	unsigned int crc = calculate_crc16(command, 6);// 计算CRC
-	command[6]       = crc & 0xFF;                 // CRC低字节
-	command[7]       = crc >> 8;                   // CRC高字节
-	gpio_set_level(RECEPT_ENABLE_PIN, 1);
+	uint32_t crc = calculate_crc16(command, 6);// 计算CRC
+	command[6]   = crc & 0xFF;                 // CRC低字节
+	command[7]   = crc >> 8;                   // CRC高字节
+	gpio_set_level(RECV_ENABLE_PIN, 1);
 	vTaskDelay(pdMS_TO_TICKS(5));
 
 	uart_write_bytes(UART_PORT_NUM, (const char *) command, sizeof(command));// 发送命令
@@ -100,16 +100,16 @@ void sendmodbus_command(uint8_t address, uint8_t functionCode, uint16_t register
 }
 
 // 读取响应数据
-bool readmodbus_response(uint8_t *buffer, uint8_t expectedLength, int timeout_ms)
+bool read_modbus_response(uint8_t *buffer, uint8_t expectedLength, int timeout_ms)
 {
-	gpio_set_level(RECEPT_ENABLE_PIN, 0);
+	gpio_set_level(RECV_ENABLE_PIN, 0);
 	vTaskDelay(pdMS_TO_TICKS(5));
 	int len = uart_read_bytes(UART_PORT_NUM, buffer, expectedLength, pdMS_TO_TICKS(timeout_ms));
 	return len == expectedLength;
 }
 
 // UART初始化
-void init_rs485()
+void rs485_init()
 {
 	const uart_config_t uart_config = {
 			.baud_rate = 9600,
@@ -124,21 +124,18 @@ void init_rs485()
 
 void modbus_task(void *arg)
 {
-
-	recept_enable_pin_init();
-
-	// 用于存储响应数据
+	receive_enable_pin_init();
 
 	while (1) {
 		// 光照传感器 0x01
-		sendmodbus_command(0x01, 0x03, 0x0002, 0x0002);// 读取光照寄存器
+		send_modbus_command(0x01, 0x03, 0x0002, 0x0002);// 读取光照寄存器
 		uint8_t readResponse_1[9];
-		if (readmodbus_response(readResponse_1, 9, 1000)) {
-			uint16_t lightHigh      = (readResponse_1[3] << 8) | readResponse_1[4];
-			uint16_t lightLow       = (readResponse_1[5] << 8) | readResponse_1[6];
-			uint32_t lightFull      = ((uint32_t) lightHigh << 16) | lightLow;
-			sensor_data.light_value = lightFull / 1000.0;
-			ESP_LOGI("Modbus", "地址 0x01 光照强度: %.3f Lux", sensor_data.light_value);
+		if (read_modbus_response(readResponse_1, 9, 1000)) {
+			uint16_t lightHigh    = (readResponse_1[3] << 8) | readResponse_1[4];
+			uint16_t lightLow     = (readResponse_1[5] << 8) | readResponse_1[6];
+			uint32_t lightFull    = ((uint32_t) lightHigh << 16) | lightLow;
+			sensor_data.luminance = lightFull / 1000.0;
+			ESP_LOGI("Modbus", "地址 0x01 光照强度: %.3f Lux", sensor_data.luminance);
 		} else {
 			ESP_LOGW("Modbus", "读取地址 0x01 光照数据失败或无响应。");
 		}
@@ -146,18 +143,14 @@ void modbus_task(void *arg)
 		vTaskDelay(pdMS_TO_TICKS(1000));
 
 		// 环境湿度和温度传感器 0x09
-		sendmodbus_command(0x09, 0x03, 0x0000, 0x0002);// 读取湿度和温度寄存器
+		send_modbus_command(0x09, 0x03, 0x0000, 0x0002);// 读取湿度和温度寄存器
 		uint8_t readResponse_2[9];
-		if (readmodbus_response(readResponse_2, 9, 1000)) {
-			uint16_t moisture                         = (readResponse_2[3] << 8) | readResponse_2[4];
-			uint16_t temperature                      = (readResponse_2[5] << 8) | readResponse_2[6];
-			sensor_data.environment_moisture_float    = moisture / 10.0;
-			sensor_data.environment_temperature_float = temperature / 10.0;
-			ESP_LOGI(
-					"Modbus",
-					"地址 0x09 环境湿度: %.1f%% 环境温度: %.1f°C",
-					sensor_data.environment_moisture_float,
-					sensor_data.environment_temperature_float);
+		if (read_modbus_response(readResponse_2, 9, 1000)) {
+			uint16_t moisture        = (readResponse_2[3] << 8) | readResponse_2[4];
+			uint16_t temperature     = (readResponse_2[5] << 8) | readResponse_2[6];
+			sensor_data.air_humidity = moisture / 10.0;
+			sensor_data.air_temp     = temperature / 10.0;
+			ESP_LOGI("Modbus", "地址 0x09 环境湿度: %.1f%% 环境温度: %.1f°C", sensor_data.air_humidity, sensor_data.air_temp);
 		} else {
 			ESP_LOGW("Modbus", "读取地址 0x09 环境湿度/温度数据失败或无响应。");
 		}
@@ -165,24 +158,24 @@ void modbus_task(void *arg)
 		vTaskDelay(pdMS_TO_TICKS(1000));
 
 		// 土壤传感器 0x03
-		sendmodbus_command(0x03, 0x03, 0x0000, 0x0004);// 读取土壤寄存器
+		send_modbus_command(0x03, 0x03, 0x0000, 0x0004);// 读取土壤寄存器
 		uint8_t readResponse_3[13];
-		if (readmodbus_response(readResponse_3, 13, 1000)) {
-			uint16_t water                = (readResponse_3[3] << 8) | readResponse_3[4];
-			uint16_t temp                 = (readResponse_3[5] << 8) | readResponse_3[6];
-			uint16_t EC                   = (readResponse_3[7] << 8) | readResponse_3[8];
-			uint16_t PH                   = (readResponse_3[9] << 8) | readResponse_3[10];
-			sensor_data.solid_water_float = water / 10.0;
-			sensor_data.solid_temp_float  = temp / 10.0;
-			sensor_data.solid_ec_float    = EC;
-			sensor_data.solid_ph_float    = PH / 10.0;
+		if (read_modbus_response(readResponse_3, 13, 1000)) {
+			uint16_t water         = (readResponse_3[3] << 8) | readResponse_3[4];
+			uint16_t temp          = (readResponse_3[5] << 8) | readResponse_3[6];
+			uint16_t EC            = (readResponse_3[7] << 8) | readResponse_3[8];
+			uint16_t PH            = (readResponse_3[9] << 8) | readResponse_3[10];
+			sensor_data.soil_water = water / 10.0;
+			sensor_data.soil_temp  = temp / 10.0;
+			sensor_data.soil_ec    = EC;
+			sensor_data.soil_ph    = PH / 10.0;
 			ESP_LOGI(
 					"Modbus",
 					"地址 0x03 土壤湿度: %.1f%% 土壤温度: %.1f°C 土壤电导率: %.1f μS/cm 土壤PH: %.1f",
-					sensor_data.solid_water_float,
-					sensor_data.solid_temp_float,
-					sensor_data.solid_ec_float,
-					sensor_data.solid_ph_float);
+					sensor_data.soil_water,
+					sensor_data.soil_temp,
+					sensor_data.soil_ec,
+					sensor_data.soil_ph);
 		} else {
 			ESP_LOGW("Modbus", "读取地址 0x03 土壤数据失败或无响应。");
 		}
@@ -206,7 +199,7 @@ void solenoid_valves_init(void)
 }
 
 // 测试
-void led38_valves_init(void)
+void led38_init(void)
 {
 	gpio_config_t io_config;
 	io_config.mode         = GPIO_MODE_OUTPUT;
@@ -227,18 +220,6 @@ void solenoid_valves_close(void)
 	gpio_set_level(SOLENOID_VALVES_PIN, 0);
 }
 
-void solenoid_contural(void)
-{
-	while (1) {
-		if (water_switch == 1) {
-			solenoid_valves_open();
-		} else {
-			solenoid_valves_close();
-		}
-		vTaskDelay(pdMS_TO_TICKS(500));
-	}
-}
-
 /*************************************************************** */
 
 #ifndef _SMARTCONFIG_H_
@@ -249,14 +230,11 @@ void solenoid_contural(void)
 #define NVS_WIFI_INFO_HANDLE "my_wifi_info" /* 用于读取nvs的命名空间 */
 #define RETRY_CONNECT_TIME   20             /* wifi重连失败次数 */
 
-void wifi_smartconfig_net_init(void);
-
 #endif
 
 
 #include <stdlib.h>
 #include <string.h>
-#include "esp_eap_client.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -269,20 +247,20 @@ void wifi_smartconfig_net_init(void);
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
-/* FreeRTOS event group to signal when we are connected & ready to make a request */
+/* FreeRTOS event group to signal when we are connected and ready to make a request */
 static EventGroupHandle_t s_wifi_event_group;
 
 /* The event group allows multiple bits for each event,
    but we only care about one event - are we connected
    to the AP with an IP? */
-static const int   CONNECTED_BIT           = BIT0;  // 连接信号
-static const int   ESPTOUCH_DONE_BIT       = BIT1;  // 配网结束
-static const int   WIFI_CONFIGURED_BIT     = BIT2;  // 网络是否配置过
-static const int   WIFI_NOT_CONFIGURED_BIT = BIT3;  // 网络否配置过
-static const char *TAG                     = "MAIN";// LOG 头
-bool               link_wifi               = false;
+static const int CONNECTED_BIT           = BIT0;// 连接信号
+static const int ESPTOUCH_DONE_BIT       = BIT1;// 配网结束
+static const int WIFI_CONFIGURED_BIT     = BIT2;// 网络是否配置过
+static const int WIFI_NOT_CONFIGURED_BIT = BIT3;// 网络否配置过
 
-static void smartconfig_example_task(void *parm);
+bool wifi_connected = false;
+
+static void smartconfig_task(void *args);
 
 /* 事件响应函数 */
 static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
@@ -295,12 +273,12 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
 			esp_wifi_connect();
 			ESP_LOGI(TAG, "get WIFI_EVENT_STA_START , go ---> esp_wifi_connect .");
 		} else {
-			xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
-			ESP_LOGI(TAG, "get WIFI_EVENT_STA_START , go ---> smartconfig_example_task .");
+			xTaskCreate(smartconfig_task, "smartconfig_task", 4096, NULL, 3, NULL);
+			ESP_LOGI(TAG, "get WIFI_EVENT_STA_START , go ---> smartconfig_task .");
 		}
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
 		vTaskDelay(pdMS_TO_TICKS(3000));
-		link_wifi = true;
+		wifi_connected = true;
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 		esp_wifi_connect();
 		retry_num++;
@@ -374,7 +352,7 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
 	}
 }
 
-static void initialize_wifi(void)
+static void wifi_init(void)
 {
 	/* 定义一个NVS操作句柄 */
 	nvs_handle nvs_my_wifi_info_handler;
@@ -438,7 +416,7 @@ static void initialize_wifi(void)
 	nvs_close(nvs_my_wifi_info_handler); /* 关闭 */
 }
 
-static void smartconfig_example_task(void *parm)
+static void smartconfig_task(void *args)
 {
 	EventBits_t uxBits;
 	ESP_ERROR_CHECK(esp_smartconfig_set_type(SC_TYPE_ESPTOUCH_AIRKISS));
@@ -448,7 +426,7 @@ static void smartconfig_example_task(void *parm)
 		uxBits = xEventGroupWaitBits(s_wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT, true, false, portMAX_DELAY);
 		if (uxBits & CONNECTED_BIT) {
 			ESP_LOGI(TAG, "WiFi Connected to ap");
-			link_wifi = true;
+			wifi_connected = true;
 		}
 		if (uxBits & ESPTOUCH_DONE_BIT) {
 			ESP_LOGI(TAG, "smartconfig over");
@@ -459,18 +437,10 @@ static void smartconfig_example_task(void *parm)
 }
 
 
-/*
- * 这个例程适用于`Linux`这类支持pthread的POSIX设备, 它演示了用SDK配置MQTT参数并建立连接, 之后创建2个线程
- *
- * + 一个线程用于保活长连接
- * + 一个线程用于接收消息, 并在有消息到达时进入默认的数据回调, 在连接状态变化时进入事件回调
- *
- * 需要用户关注或修改的部分, 已经用 TODO 在注释中标明
- *
+/**
+ * ALink iot *******************************************************************************************************************************
  */
 
-/* TODO: 替换为自己设备的三元组 */
-// 产品密钥，设备名称，设备密钥
 
 #include "sdkconfig.h"
 
@@ -606,9 +576,7 @@ void user_download_recv_handler(void *handle, const aiot_mqtt_download_recv_t *p
 		return;
 	}
 
-
 	/* 应在此实现文件本地固化的操作 */
-
 	err = esp_ota_write(update_handle, (const void *) packet->data.data_resp.data, packet->data.data_resp.data_size);
 	if (err != ESP_OK) {
 		esp_ota_abort(update_handle);
@@ -648,7 +616,7 @@ void user_ota_recv_handler(void *ota_handle, aiot_ota_recv_t *ota_msg, void *use
 	}
 }
 
-void ota_task(void)
+void *ota_task(void *args)
 {
 	ESP_LOGI(TAG, "Starting OTA example task");
 
@@ -702,7 +670,7 @@ void ota_task(void)
 				ESP_LOGI(TAG, "Prepare to restart system!");
 				aiot_mqtt_download_deinit(&g_dl_handle);
 				esp_restart();
-				return;
+				return NULL;
 				// aiot_mqtt_download_deinit(&g_dl_handle);
 				// break;
 			} else if (
@@ -715,6 +683,7 @@ void ota_task(void)
 		}
 		sleep(1);
 	}
+	return NULL;
 }
 
 /* 执行aiot_mqtt_process的线程, 包含心跳发送和QoS1消息重发 */
@@ -749,9 +718,9 @@ void *demo_mqtt_recv_thread(void *args)
 	return NULL;
 }
 
-//******************************************************************************************************************************************
-/*处理服务器下发的消息*/
-/*******************************************************************************/
+/**
+* 处理服务器下发的消息
+*/
 
 // 这个函数用于处理服务器发送给客户端的回复消息。当客户端向服务器发送请求（例如，查询设备状态、更新配置等）
 // 服务器会对这些请求做出响应，回复消息会包含请求的结果和其他相关信息。
@@ -786,7 +755,7 @@ static void demo_dm_recv_property_set(void *dm_handle, const aiot_dm_recv_t *rec
 
 	if (strcmp(temp_params, "{\"WaterOutletSwitch\":0}") == 0) {
 		// Solenoid_valves_close();
-		water_switch = 0;
+		water_switch = false;
 		solenoid_valves_close();
 		gpio_set_level(GPIO_NUM_38, 0);
 		printf("电磁阀关闭\r\n");
@@ -794,7 +763,7 @@ static void demo_dm_recv_property_set(void *dm_handle, const aiot_dm_recv_t *rec
 	}
 	if (strcmp(temp_params, "{\"WaterOutletSwitch\":1}") == 0) {
 		// Solenoid_valves_open();
-		water_switch = 1;
+		water_switch = true;
 		solenoid_valves_open();
 		gpio_set_level(GPIO_NUM_38, 1);
 		printf("电磁阀打开\r\n");
@@ -928,101 +897,31 @@ int32_t demo_send_event_post(void *dm_handle, char *event_id, char *params)
 	return aiot_dm_send(dm_handle, &msg);
 }
 
-/*各属性 上报函数*/
-
-// CurrentTemperature
-void currentTemperature_send_property_post(void *dm_handle, float CurrentTemperature)
-{
-	char jsonBuffer[128];// 定义一个足够大的缓冲区来存放 JSON 字符串
-	snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"CurrentTemperature\": %.1f}", CurrentTemperature);// 使用 snprintf 格式化字符串
-	demo_send_property_post(dm_handle, jsonBuffer);// 使用格式化后的字符串作为参数调用 demo_send_property_post
-}
-
-// WaterOutletSwitch
-void waterOutletSwitch_send_property_post(void *dm_handle, int WaterOutletSwitch)
-{
-	char jsonBuffer[128];                                                                      // 定义一个足够大的缓冲区来存放 JSON 字符串
-	snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"WaterOutletSwitch\": %d}", WaterOutletSwitch);// 使用 snprintf 格式化字符串
-	demo_send_property_post(dm_handle, jsonBuffer);// 使用格式化后的字符串作为参数调用 demo_send_property_post
-}
-
-// 土壤钾 SoilK
-void soilK_send_property_post(void *dm_handle, float SoilK)
-{
-	char jsonBuffer[128];                                                // 定义一个足够大的缓冲区来存放 JSON 字符串
-	snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"SoilK\": %.1f}", SoilK);// 使用 snprintf 格式化字符串
-	demo_send_property_post(dm_handle, jsonBuffer);                      // 使用格式化后的字符串作为参数调用 demo_send_property_post
-}
-
-// 土壤磷 SoilP
-void soilP_send_property_post(void *dm_handle, float SoilP)
-{
-	char jsonBuffer[128];                                                // 定义一个足够大的缓冲区来存放 JSON 字符串
-	snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"SoilP\": %.1f}", SoilP);// 使用 snprintf 格式化字符串
-	demo_send_property_post(dm_handle, jsonBuffer);                      // 使用格式化后的字符串作为参数调用 demo_send_property_post
-}
-
-// 土壤氮 SoilN
-void soilN_send_property_post(void *dm_handle, float SoilN)
-{
-	char jsonBuffer[128];                                                // 定义一个足够大的缓冲区来存放 JSON 字符串
-	snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"SoilN\": %.1f}", SoilN);// 使用 snprintf 格式化字符串
-	demo_send_property_post(dm_handle, jsonBuffer);                      // 使用格式化后的字符串作为参数调用 demo_send_property_post
-}
-
-// 土壤温度 SoilTemperature
-void soilTemperature_send_property_post(void *dm_handle, float SoilTemperature)
-{
-	char jsonBuffer[128];                                                                    // 定义一个足够大的缓冲区来存放 JSON 字符串
-	snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"SoilTemperature\": %.1f}", SoilTemperature);// 使用 snprintf 格式化字符串
-	demo_send_property_post(dm_handle, jsonBuffer);// 使用格式化后的字符串作为参数调用 demo_send_property_post
-}
-
-// 土壤湿度 SoilHumidity
-void soilHumidity_send_property_post(void *dm_handle, float SoilHumidity)
-{
-	char jsonBuffer[128];                                                              // 定义一个足够大的缓冲区来存放 JSON 字符串
-	snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"SoilHumidity\": %.1f}", SoilHumidity);// 使用 snprintf 格式化字符串
-	demo_send_property_post(dm_handle, jsonBuffer);// 使用格式化后的字符串作为参数调用 demo_send_property_post
-}
-
-// 土壤PH值 SoilPH
-void soilPH_send_property_post(void *dm_handle, float SoilPH)
-{
-	char jsonBuffer[128];                                                  // 定义一个足够大的缓冲区来存放 JSON 字符串
-	snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"SoilPH\": %.1f}", SoilPH);// 使用 snprintf 格式化字符串
-	demo_send_property_post(dm_handle, jsonBuffer);                        // 使用格式化后的字符串作为参数调用 demo_send_property_post
-}
-
-// 土壤EC值 SoilEC
-void soilEC_send_property_post(void *dm_handle, float SoilEC)
-{
-	char jsonBuffer[128];                                                  // 定义一个足够大的缓冲区来存放 JSON 字符串
-	snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"SoilEC\": %.1f}", SoilEC);// 使用 snprintf 格式化字符串
-	demo_send_property_post(dm_handle, jsonBuffer);                        // 使用格式化后的字符串作为参数调用 demo_send_property_post
-}
-
-// 相对湿度 RelativeHumidity
-void relativeHumidity_send_property_post(void *dm_handle, float RelativeHumidity)
-{
-	char jsonBuffer[128];                                                                      // 定义一个足够大的缓冲区来存放 JSON 字符串
-	snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"RelativeHumidity\": %.1f}", RelativeHumidity);// 使用 snprintf 格式化字符串
-	demo_send_property_post(dm_handle, jsonBuffer);// 使用格式化后的字符串作为参数调用 demo_send_property_post
-}
-
-// 光照强度 LightLux
-void lightLux_send_property_post(void *dm_handle, float LightLux)
-{
-	char jsonBuffer[128];                                                      // 定义一个足够大的缓冲区来存放 JSON 字符串
-	snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"LightLux\": %.1f}", LightLux);// 使用 snprintf 格式化字符串
-	demo_send_property_post(dm_handle, jsonBuffer);                            // 使用格式化后的字符串作为参数调用 demo_send_property_post
-}
 
 /********************************************************************************************************************************************************/
 
-/*****************************************************************************************************************/
+#include "json_generator.h"
 
-int linkkit_main(void)
+
+typedef struct {
+	char   buf[1024];
+	size_t offset;
+} json_gen_test_result_t;
+
+static void flush_str(char *buf, void *priv)
+{
+	json_gen_test_result_t *result = (json_gen_test_result_t *) priv;
+	if (result) {
+		if (strlen(buf) > sizeof(result->buf) - result->offset) {
+			printf("Result Buffer too small\r\n");
+			return;
+		}
+		memcpy(result->buf + result->offset, buf, strlen(buf));
+		result->offset += strlen(buf);
+	}
+}
+
+int alink_main(void)
 {
 
 	/*************
@@ -1188,15 +1087,30 @@ int linkkit_main(void)
 
 	/* 主循环进入休眠 */
 	while (1) {
-		waterOutletSwitch_send_property_post(dm_handle, water_switch);
-		currentTemperature_send_property_post(dm_handle, sensor_data.environment_temperature_float);
-		soilTemperature_send_property_post(dm_handle, sensor_data.solid_temp_float);
-		soilHumidity_send_property_post(dm_handle, sensor_data.solid_water_float);
-		soilPH_send_property_post(dm_handle, sensor_data.solid_ph_float);
-		soilEC_send_property_post(dm_handle, sensor_data.solid_ec_float);
-		relativeHumidity_send_property_post(dm_handle, sensor_data.environment_moisture_float);
-		lightLux_send_property_post(dm_handle, sensor_data.light_value);
-		vTaskDelay(pdMS_TO_TICKS(20000));
+		char                   buf[128];
+		json_gen_str_t         jstr;
+		json_gen_test_result_t result;
+		memset(&result, 0, sizeof(json_gen_test_result_t));
+
+		json_gen_str_start(&jstr, buf, sizeof(buf), flush_str, &result);
+		json_gen_start_object(&jstr);
+
+		json_gen_obj_set_bool(&jstr, "WaterOutletSwitch", water_switch);
+		json_gen_obj_set_float(&jstr, "CurrentTemperature", sensor_data.air_temp);
+		json_gen_obj_set_float(&jstr, "RelativeHumidity", sensor_data.air_humidity);
+		json_gen_obj_set_float(&jstr, "LightLux", sensor_data.luminance);
+		json_gen_obj_set_float(&jstr, "SoilTemperature", sensor_data.soil_temp);
+		json_gen_obj_set_float(&jstr, "SoilHumidity", sensor_data.soil_water);
+		json_gen_obj_set_float(&jstr, "SoilPH", sensor_data.soil_ph);
+		json_gen_obj_set_float(&jstr, "SoilEC", sensor_data.soil_ec);
+
+		json_gen_end_object(&jstr);
+		json_gen_str_end(&jstr);
+
+		demo_send_property_post(dm_handle, result.buf);
+
+		//		TODO: 上报周期
+		vTaskDelay(pdMS_TO_TICKS(2 * 1000));
 	}
 
 exit:
@@ -1232,23 +1146,23 @@ exit:
 
 void app_main(void)
 {
-
 	// 初始化RS485 UART
-	init_rs485();
+	rs485_init();
 	solenoid_valves_init();
-	led38_valves_init();
+	led38_init();
+
 	// 创建Modbus任务
 	xTaskCreate(modbus_task, "modbus_task", 8192, NULL, 10, NULL);
 
-
+	// 联网
 	ESP_ERROR_CHECK(nvs_flash_init());
-	initialize_wifi();
-	while (!link_wifi) {
+	wifi_init();
+	while (!wifi_connected) {
 		printf("no wifi\r\n");
 		vTaskDelay(pdMS_TO_TICKS(1000));
 	}
 
-	/* start linkkit mqtt */
-	ESP_LOGI(TAG, "Start linkkit mqtt");
-	linkkit_main();
+	// loop
+	ESP_LOGI(TAG, "Start alink main");
+	alink_main();
 }
