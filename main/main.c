@@ -285,7 +285,9 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
 		ESP_LOGI(TAG, "retry to connect to the AP %d times. \n", retry_num);
 		if (retry_num == RETRY_CONNECT_TIME) /* WiFi重连次数等于10 */
 		{
+
 			nvs_flash_erase();
+
 			ESP_LOGI(TAG, "!!! retry connect num is enough , now retry smartconfig");
 			esp_restart();
 			// 重新配网
