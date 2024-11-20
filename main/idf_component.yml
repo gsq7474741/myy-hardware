@@ -1,0 +1,8 @@
+version: "0.1.0"
+targets:
+  - esp32s3
+description: MY-T01 firmware
+dependencies:
+  idf: ">=5.1"
+#  bblanchon/arduinojson: "^6.21.3"
+  espressif/json_generator: "^1.1.2"
