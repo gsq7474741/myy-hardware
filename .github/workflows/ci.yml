@@ -1,0 +1,24 @@
+name: "Build example apps"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+jobs:
+    cpp-compatibility:
+        name: Cpp compatibility
+        strategy:
+            matrix:
+                idf_version: ["release-v5.1", "latest"]
+                target: ["esp32s3"]
+                example: [{name: cpp_compatibility, path: "build_test"}]
+        uses: "./.github/workflows/build-app.yml"
+        with:
+            idf_version: ${{matrix.idf_version}}
+            target: ${{matrix.target}}
+            app_name: ${{matrix.example.name}}
+            app_path: './'
+            upload_artifacts: false
