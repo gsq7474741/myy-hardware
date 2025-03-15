@@ -1,5 +1,20 @@
 idf_component_register(
-        SRCS "main.c"
-        INCLUDE_DIRS "../../myy-hardware/components/C-SDK"
-        INCLUDE_DIRS "${IDF_PATH}/components"
+        SRCS
+             "main.c"
+             "middleware/src/modbus.c"
+             "middleware/src/solenoid.c"
+             "wifi/src/wifi.c"
+             "Alink/src/mqtt_cb.c"
+             "Alink/src/json.c"
+             "Alink/src/OTA.c"
+             "Alink/src/mqtt_thread.c"
+             "demo_event/src/Report.c"
+             "demo_event/src/Send.c"
+        INCLUDE_DIRS
+             "E:/myy-hardware/myy-hardware-add_workflow/components/C-SDK"
+             "${IDF_PATH}/components"
+             "middleware/inc"
+             "wifi/inc"
+             "Alink/inc"
+             "demo_event/inc"
 )
