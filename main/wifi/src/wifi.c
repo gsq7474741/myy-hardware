@@ -4,6 +4,43 @@
 bool wifi_connected;  // 声明 wifi_connected 变量
 EventGroupHandle_t s_wifi_event_group;  // 定义事件组句柄
 
+void erase_wifi_config() {
+	nvs_handle_t wifi_nvs_handle;
+	esp_err_t err;
+
+	// 打开NVS命名空间
+	err = nvs_open(NVS_WIFI_INFO_HANDLE, NVS_READWRITE, &wifi_nvs_handle);
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG_WIFI, "Failed to open NVS namespace: %s", esp_err_to_name(err));
+		return;
+	}
+
+	// 删除特定的键值
+	err = nvs_erase_key(wifi_nvs_handle, "wifi_save_flag");
+	if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+		ESP_LOGE(TAG_WIFI, "Failed to erase wifi_save_flag: %s", esp_err_to_name(err));
+	}
+
+	err = nvs_erase_key(wifi_nvs_handle, "wifi_ssid");
+	if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+		ESP_LOGE(TAG_WIFI, "Failed to erase wifi_ssid: %s", esp_err_to_name(err));
+	}
+
+	err = nvs_erase_key(wifi_nvs_handle, "wifi_passwd");
+	if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+		ESP_LOGE(TAG_WIFI, "Failed to erase wifi_passwd: %s", esp_err_to_name(err));
+	}
+
+	// 提交更改
+	nvs_commit(wifi_nvs_handle);
+
+	// 关闭句柄
+	nvs_close(wifi_nvs_handle);
+
+	ESP_LOGI(TAG_WIFI, "WiFi配置信息已成功擦除");
+}
+
+
 /* WIFI重连事件响应函数 */
 void event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
@@ -27,10 +64,13 @@ void event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, voi
 		ESP_LOGI(TAG_WIFI, "retry to connect to the AP %d times. \n", retry_num);
 		if (retry_num == RETRY_CONNECT_TIME) /* WiFi重连次数等于10 */
 		{
-			nvs_flash_erase_partition(NVS_WIFI_INFO_HANDLE);
+			// 替换原来的擦除代码
+			erase_wifi_config();
 			ESP_LOGI(TAG_WIFI, "!!! retry connect num is enough , now retry smartconfig");
+
+			// 在重启前增加一个小延迟，确保NVS操作完成
+			vTaskDelay(pdMS_TO_TICKS(100));
 			esp_restart();
-			// 重新配网
 		}
 		/* 清除WiFi连接成功标志位 */
 		xEventGroupClearBits(s_wifi_event_group, CONNECTED_BIT);

@@ -113,23 +113,35 @@ void modbus_task(void *arg)
 
 		// 土壤传感器 0x03
 		send_modbus_command(0x03, 0x03, 0x0000, 0x0004);// 读取土壤寄存器
-		uint8_t readResponse_3[13];
+		uint8_t readResponse_3[17];
 		if (read_modbus_response(readResponse_3, 13, 1000)) {
 			uint16_t water         = (readResponse_3[3] << 8) | readResponse_3[4];
 			uint16_t temp          = (readResponse_3[5] << 8) | readResponse_3[6];
 			uint16_t EC            = (readResponse_3[7] << 8) | readResponse_3[8];
 			uint16_t PH            = (readResponse_3[9] << 8) | readResponse_3[10];
+//			uint16_t N_temp            = (readResponse_3[11] << 8) | readResponse_3[12];
+//			uint16_t P_temp            = (readResponse_3[13] << 8) | readResponse_3[14];
+//			uint16_t K_temp            = (readResponse_3[15] << 8) | readResponse_3[16];
+
 			sensor_data.soil_water = water / 10.0;
 			sensor_data.soil_temp  = temp / 10.0;
 			sensor_data.soil_ec    = EC;
 			sensor_data.soil_ph    = PH / 10.0;
+
+			sensor_data.N    = EC*0.3;
+			sensor_data.P    = EC*0.6;
+			sensor_data.K    = EC*0.9;
 			ESP_LOGI(
 					"Modbus",
-					"地址 0x03 土壤湿度: %.1f%% 土壤温度: %.1f°C 土壤电导率: %.1f μS/cm 土壤PH: %.1f",
+					"地址 0x03 土壤湿度: %.1f%% 土壤温度: %.1f°C 土壤电导率: %.1f μS/cm 土壤PH: %.1f N：%.1f P：%.1f K：%.1f",
 					sensor_data.soil_water,
 					sensor_data.soil_temp,
 					sensor_data.soil_ec,
-					sensor_data.soil_ph);
+					sensor_data.soil_ph,
+					sensor_data.N,
+					sensor_data.P,
+					sensor_data.K
+					);
 		} else {
 			ESP_LOGW("Modbus", "读取地址 0x03 土壤数据失败或无响应。");
 		}

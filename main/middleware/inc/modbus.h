@@ -14,6 +14,10 @@ typedef struct {
 	float soil_temp;   // 土壤温度，单位 °C
 	float soil_ec;     // 土壤电导率，单位 μS/cm
 	float soil_ph;     // 土壤 pH 值
+
+	float N;   // 氮浓度，单位 %
+	float P;     // P浓度，单位 %
+	float K;     // K浓度，单位 %
 } sensor_data_t;
 
 extern sensor_data_t sensor_data; // 声明全局变量

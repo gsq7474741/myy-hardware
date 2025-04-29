@@ -33,8 +33,8 @@
 #define MQTT_PUB_TOPIC_PROPERTY "/sys/" CONFIG_PRODUCT_KEY "/" CONFIG_DEVICE_NAME "/thing/event/property/post"
 
 /* 任务调度 */
-#define PUB_TIME 2  //秒
-#define MODBUS_TASK_TIME 1  //秒
+#define PUB_TIME 0.5  //秒
+#define MODBUS_TASK_TIME 0.5  //秒
 
 /* RS485相关宏定义 */
 #define TXD_PIN         17        // RS485 TX pin
