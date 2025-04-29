@@ -20,6 +20,22 @@ myy项目硬件仓库
 
 [//]: # (开发环境的`.env.dev`文件请联系管理员获取。)
 
+## 参数调整
+
+smartconfig.h
+
+![image-20250413155510010](README.assets/image-20250413155510010.png)
+
+main.h
+
+![image-20250413155533303](README.assets/image-20250413155533303.png)
+
+上网配置 sadconfig
+
+配置完后重新编译 sdkconfigif 配置不同的设备名称
+
+![image-20250218154626460](README.assets/image-20250218154626460.png)
+
 ## 问题记录
 
 开发过程中踩过的坑可以在这里记录下来，方便后续查阅。
@@ -36,12 +52,6 @@ Note: python;;D:/Espressif/frameworks/esp-idf-v5.3.2/components/esptool_py/espto
 
 问题是端口一直找啊找 ipf.py -p COM
 
-### 上网配置这里
-
-配置完后重新编译 sdkconfigif
-
-![image-20250218154626460](README.assets/image-20250218154626460.png)
-
 设置下载端口
 
 ```cmake
@@ -49,8 +59,6 @@ set(ESPPORT "COM5" CACHE STRING "Default serial port")
 ```
 
 WIFI使用2.4G频段
-
-
 
 ### foo
 

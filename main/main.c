@@ -246,6 +246,9 @@ int alink_main(void)
 		json_gen_obj_set_float(&jstr, "SoilHumidity", sensor_data.soil_water);
 		json_gen_obj_set_float(&jstr, "SoilPH", sensor_data.soil_ph);
 		json_gen_obj_set_float(&jstr, "SoilEC", sensor_data.soil_ec);
+		json_gen_obj_set_float(&jstr, "SoilN", sensor_data.N);
+		json_gen_obj_set_float(&jstr, "SoilP", sensor_data.P);
+		json_gen_obj_set_float(&jstr, "SoilK", sensor_data.K);
 
 		json_gen_end_object(&jstr);
 		json_gen_str_end(&jstr);
