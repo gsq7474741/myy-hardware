@@ -1,4 +1,15 @@
 #include "report.h"
+#include "send.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+// 电磁阀属性上报函数
+void WaterOutletSwitch_send_property_post(void *dm_handle, int state)
+{
+    char params[64];
+    snprintf(params, sizeof(params), "{\"WaterOutletSwitch\":%d}", state ? 1 : 0);
+    demo_send_property_post(dm_handle, params);
+}
 
 // 处理服务器下发的属性设置，比如温度设置
 void demo_dm_recv_property_set(void *dm_handle, const aiot_dm_recv_t *recv, void *userdata)
@@ -19,16 +30,14 @@ void demo_dm_recv_property_set(void *dm_handle, const aiot_dm_recv_t *recv, void
 	temp_params[recv->data.property_set.params_len] = '\0';
 
 	if (strcmp(temp_params, "{\"WaterOutletSwitch\":0}") == 0) {
-		// Solenoid_valves_close();
 		water_switch = false;
 		solenoid_valves_close();
-		// WaterOutletSwitch_send_property_post(dm_handle,0);
+		WaterOutletSwitch_send_property_post(dm_handle, 0);
 	}
 	if (strcmp(temp_params, "{\"WaterOutletSwitch\":1}") == 0) {
-		// Solenoid_valves_open();
 		water_switch = true;
 		solenoid_valves_open();
-		// WaterOutletSwitch_send_property_post(dm_handle,1);
+		WaterOutletSwitch_send_property_post(dm_handle, 1);
 	}
 }
 

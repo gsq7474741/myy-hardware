@@ -238,7 +238,7 @@ int alink_main(void)
 		json_gen_str_start(&jstr, buf, sizeof(buf), flush_str, &result);
 		json_gen_start_object(&jstr);
 
-		json_gen_obj_set_bool(&jstr, "WaterOutletSwitch", water_switch);
+		json_gen_obj_set_int(&jstr, "WaterOutletSwitch", water_switch ? 1 : 0);
 		json_gen_obj_set_float(&jstr, "CurrentTemperature", sensor_data.air_temp);
 		json_gen_obj_set_float(&jstr, "RelativeHumidity", sensor_data.air_humidity);
 		json_gen_obj_set_float(&jstr, "LightLux", sensor_data.luminance);
