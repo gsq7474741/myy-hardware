@@ -11,7 +11,7 @@ idf_component_register(
              "demo_event/src/Report.c"
              "demo_event/src/Send.c"
         INCLUDE_DIRS
-             "E:/myy-hardware/myy-hardware-add_workflow/components/C-SDK"
+             "../components/C-SDK"
              "${IDF_PATH}/components"
              "middleware/inc"
              "wifi/inc"
